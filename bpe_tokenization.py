@@ -14,56 +14,73 @@ def pre_tokenize(corpus: str, pre_tokens, pattern):
 
     return pre_tokens
 
-# get maximum co-occuring sub tokens pairs, for merge
-def get_max_bp(pre_tokens_to_freq):
-    pair_counter = defaultdict(int)
 
-    # iterate through pre_tokens
+def construct_pair_counter(pre_tokens_to_freq):
+    pair_counter = defaultdict(int)
+    
     for item, count in pre_tokens_to_freq.items():
 
         # count up co-occuring pairs
-        for index in range(0, len(item) - 1, 1):
+        for index in range(0, len(item) - 1):
             bp1, bp2 = item[index], item[index + 1]
-            pair_counter[(bp1,  bp2)] += count
+            pair_counter[(bp1, bp2)] += count
 
-    # identify the maximum one, compare count then lexicographic order
+    return pair_counter
+
+
+def find_max_bp(pair_counter):
     max_bp = None
     for bp, count in pair_counter.items():
-
         if (max_bp == None) or count > max_bp[1] or (count == max_bp[1] and bp > max_bp[0]):
             max_bp = (bp, count)
 
     max_bp = max_bp[0]
+
     return max_bp
 
+def perform_train(pre_tokens_to_freq, pair_counter):
 
-# use identified max bp, modify our prefix_to_freq
-# to replace pre_merged token with new max_bp
-def merge_in_max_bp(pre_tokens_to_freq, max_bp):
-    
+    max_bp = find_max_bp(pair_counter)
+
+    # perform merge
     new_pre_token_to_freq = defaultdict(int)
 
-    # construct a new freq dict with all the valid items + the merged ones
     for pre_token, count in pre_tokens_to_freq.items():
         new_pre_token = []
         index = 0
-        while index < len(pre_token) - 1:
+        while index < len(pre_token):
+
+            # edge case
+            if index == len(pre_token) - 1:
+                new_pre_token.append(pre_token[index])
+                break
+
             bp1, bp2 = pre_token[index], pre_token[index + 1]
-            
-            if max_bp != (bp1 , bp2):
+
+            # base case
+            if max_bp != (bp1, bp2):
                 new_pre_token.append(bp1)
                 index += 1
             else:
-                new_pre_token.append(bp1 + bp2)
-                index += 2
+                merge_token = bp1 + bp2
 
-        # check if theres still an element left
-        if index == len(pre_token) - 1:
-            new_pre_token.append(pre_token[index])
+                # first update pair counter
+                if index - 1 >= 0:
+                    pair_counter[(pre_token[index - 1], bp1)] -= count
+                    pair_counter[(pre_token[index - 1], merge_token)] += count
+
+                if index + 2 < len(pre_token):
+                    pair_counter[(bp2, pre_token[index + 2])] -= count
+                    pair_counter[(merge_token, pre_token[index + 2])] += count
+
+                pair_counter[(bp1, bp2)] -= count
+
+                new_pre_token.append(merge_token)
+                index += 2
 
         new_pre_token_to_freq[tuple(new_pre_token)] += count
 
-    return new_pre_token_to_freq
+    return new_pre_token_to_freq, max_bp, pair_counter
 
 def pretokenize_chunk(start, end, path, pattern, special_pattern):
 
@@ -115,6 +132,9 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str], patte
 
     pre_tokens = defaultdict(int, pre_tokens)
 
+    # initialize pair_counter
+    pair_counter = construct_pair_counter(pre_tokens)
+
     # lets create the initial vocabulary, a dit of [int, byte] mapping from token ID to bytes
     vocab = {}
 
@@ -129,17 +149,14 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str], patte
     #print(f"Initial Pretokens map: {pre_tokens}")
 
     while len(vocab) < vocab_size:
-        # max bp is now a tuple object
-        max_bp = get_max_bp(pre_tokens)
+
+
+        pre_tokens, max_bp, pair_counter = perform_train(pre_tokens, pair_counter)
         
         bp1, bp2 = max_bp
         vocab[len(vocab)] = bp1 + bp2
         # append BPE merges produced for training in order of creation
         merges.append(max_bp)
-
-        #print(f"Max BP at len vocab {len(vocab)} is: {max_bp}")
-        pre_tokens = merge_in_max_bp(pre_tokens, max_bp)
-        #print(f"Updated Pretokens arr is: {pre_tokens}")
 
     return vocab, merges
 
